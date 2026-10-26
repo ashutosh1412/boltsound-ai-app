@@ -11,6 +11,7 @@ class Completion:
     model: str
     input_tokens: int = 0
     output_tokens: int = 0
+    failures: list[str] = field(default_factory=list)  # calls that failed before this one worked
 
 
 @dataclass

@@ -3,12 +3,23 @@ from pathlib import Path
 
 from app.assistant import Assistant, build_prompt
 from app.config import Settings
+from app.gateway import ModelGateway
 from app.handoff import HandoffQueue
-from app.providers.fake import FakeProvider
+from app.providers.fake import DownProvider, FakeProvider
 from app.retrieval import Chunk
 from app.tools import OrderStore
 
-SETTINGS = Settings("", "", "fake", "fake-small", price_in_per_m=1.0, price_out_per_m=1.0)
+SETTINGS = Settings(
+    gemini_api_key="",
+    openai_api_key="",
+    main_model="fake",
+    small_model="fake-small",
+    fallback_model="fake-backup",
+    timeout_s=10,
+    thinking_level="low",
+    price_in_per_m=1.0,
+    price_out_per_m=1.0,
+)
 GUARD = FakeProvider("NORMAL")
 RETURNS = Chunk("returns.md", "Returns within 30 days.")
 
@@ -70,3 +81,9 @@ def test_handover_promise_creates_a_real_ticket(tmp_path):
     reply = make(provider, handoffs=handoffs).answer("Do the X2 work with a PS5?", "Riya")
     assert reply.trace[-1].name == "handover"
     assert "Riya" in handoffs.path.read_text()
+
+
+def test_model_outage_becomes_a_handover(tmp_path):
+    reply = make(ModelGateway([DownProvider()], sleep=lambda s: None)).answer("Can I return it?", "Riya")
+    assert "ticket HT-" in reply.text
+    assert any(step.status == "error" for step in reply.trace)

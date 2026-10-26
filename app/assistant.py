@@ -12,7 +12,7 @@ from app.guardrails import (
     wants_handover,
 )
 from app.handoff import HandoffQueue
-from app.providers.base import LLMProvider
+from app.providers.base import LLMProvider, ProviderError
 from app.retrieval import Chunk
 from app.tools import OrderStore, find_order_ids
 from app.types import Completion, Reply, TraceStep
@@ -63,9 +63,16 @@ class Assistant:
         order_facts = self._look_up_orders(message, customer, reply)
         prompt = build_prompt(message, chunks, order_facts)
         allowed = {chunk.source for chunk in chunks} | ({"orders"} if order_facts else set())
-        reply.text = self._answer_checked(prompt, allowed, reply)
+        start = time.perf_counter()
+        try:
+            reply.text = self._answer_checked(prompt, allowed, reply)
+            reason = "not covered by help centre"
+        except ProviderError as exc:
+            ms = (time.perf_counter() - start) * 1000
+            reply.trace.append(TraceStep("model", str(exc), ms=ms, status="error"))
+            reply.text, reason = "", "models unavailable"
         if wants_handover(reply.text) or not reply.text:
-            ticket = self.handoffs.create(customer, message, reason="not covered by help centre")
+            ticket = self.handoffs.create(customer, message, reason=reason)
             reply.trace.append(TraceStep("handover", f"ticket {ticket.id} created", status="warn"))
             reply.text = HANDOVER_REPLY.format(ticket=ticket.id)
         return reply
@@ -117,13 +124,11 @@ class Assistant:
         start = time.perf_counter()
         completion = self.provider.complete(system, prompt)
         reply.cost_usd += self._cost(completion)
-        reply.trace.append(
-            TraceStep(
-                "model",
-                f"{completion.model} · {completion.input_tokens}→{completion.output_tokens} tokens",
-                ms=(time.perf_counter() - start) * 1000,
-            )
-        )
+        detail = f"{completion.model} · {completion.input_tokens}→{completion.output_tokens} tokens"
+        if completion.failures:
+            detail += " · after failures: " + ", ".join(completion.failures)
+        ms = (time.perf_counter() - start) * 1000
+        reply.trace.append(TraceStep("model", detail, ms=ms, status="warn" if completion.failures else "ok"))
         return completion
 
     def _cost(self, completion: Completion) -> float:
