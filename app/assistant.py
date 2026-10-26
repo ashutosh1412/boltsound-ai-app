@@ -4,7 +4,7 @@ import time
 from typing import Protocol
 
 from app.config import Settings
-from app.guardrails import looks_like_prompt_attack, mask_personal_data
+from app.guardrails import guard_model_says_attack, looks_like_prompt_attack, mask_personal_data
 from app.providers.base import LLMProvider
 from app.retrieval import Chunk
 from app.tools import OrderStore, find_order_ids
@@ -26,9 +26,15 @@ class Searcher(Protocol):
 
 class Assistant:
     def __init__(
-        self, provider: LLMProvider, settings: Settings, retriever: Searcher, orders: OrderStore
+        self,
+        provider: LLMProvider,
+        settings: Settings,
+        retriever: Searcher,
+        orders: OrderStore,
+        guard: LLMProvider,
     ) -> None:
         self.provider = provider
+        self.guard = guard
         self.settings = settings
         self.retriever = retriever
         self.orders = orders
@@ -47,12 +53,15 @@ class Assistant:
         return reply
 
     def _guard_input(self, message: str, reply: Reply) -> tuple[str, bool]:
-        if looks_like_prompt_attack(message):
-            reply.trace.append(TraceStep("input guard", "prompt attack blocked", status="blocked"))
-            return message, False
+        start = time.perf_counter()
         masked, found = mask_personal_data(message)
+        if looks_like_prompt_attack(masked) or guard_model_says_attack(self.guard, masked):
+            ms = (time.perf_counter() - start) * 1000
+            reply.trace.append(TraceStep("input guard", "prompt attack blocked", ms=ms, status="blocked"))
+            return masked, False
         detail = f"masked: {', '.join(found)}" if found else "clean"
-        reply.trace.append(TraceStep("input guard", detail, status="warn" if found else "ok"))
+        ms = (time.perf_counter() - start) * 1000
+        reply.trace.append(TraceStep("input guard", detail, ms=ms, status="warn" if found else "ok"))
         return masked, True
 
     def _retrieve(self, message: str, reply: Reply) -> list[Chunk]:

@@ -10,4 +10,5 @@ from app.tools import OrderStore
 def build_assistant(settings: Settings) -> Assistant:
     provider = GeminiProvider(settings.gemini_api_key, settings.main_model)
     retriever = Retriever(settings.gemini_api_key, load_chunks())
-    return Assistant(provider, settings, retriever, OrderStore())
+    guard = GeminiProvider(settings.gemini_api_key, settings.small_model)
+    return Assistant(provider, settings, retriever, OrderStore(), guard)
