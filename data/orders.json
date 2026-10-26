@@ -1,0 +1,5 @@
+{
+  "BS-2291": {"customer": "Riya", "product": "BoltSound X2", "price": 2499, "status": "delivered", "delivered_days_ago": 20},
+  "BS-3310": {"customer": "Arjun", "product": "BoltSound X1", "price": 1499, "status": "delivered", "delivered_days_ago": 45},
+  "BS-4102": {"customer": "Meera", "product": "BoltSound Buds Pro", "price": 3999, "status": "shipped", "delivered_days_ago": null}
+}
