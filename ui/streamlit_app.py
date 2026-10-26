@@ -29,6 +29,12 @@ def chat_tab(customer: str) -> None:
         for message, reply in st.session_state.history:
             st.chat_message("user").write(message)
             st.chat_message("assistant", avatar="🤖").write(reply.text)
+        if st.session_state.history:
+            i = len(st.session_state.history) - 1
+            rating = st.feedback("thumbs", key=f"rating-{i}")
+            if rating is not None and st.session_state.get("rated") != i:
+                get_assistant().rate(customer, st.session_state.history[i][1], thumbs_up=rating == 1)
+                st.session_state.rated = i
     with hood_col:
         st.subheader("Under the hood")
         if not st.session_state.history:
@@ -59,7 +65,15 @@ def dashboard_tab() -> None:
     left.bar_chart(s.routes, horizontal=True)
     right.markdown("**Time per message (s)**")
     right.line_chart([r["ms"] / 1000 for r in records])
-    st.markdown(f"**Blocked:** {s.blocked} · **Model errors:** {s.errors}")
+    feedback = get_assistant().feedback.read()
+    count = {
+        sig: sum(f["signal"] == sig for f in feedback) for sig in ("up", "down", "rephrased", "frustrated")
+    }
+    st.markdown(
+        f"**Blocked:** {s.blocked} · **Model errors:** {s.errors} · "
+        f"**Feedback:** 👍 {count['up']} · 👎 {count['down']} · rephrased {count['rephrased']} · "
+        f"frustrated {count['frustrated']} (only {count['up'] + count['down']} of {s.messages} answers rated)"
+    )
     st.dataframe(
         [
             {k: r[k] for k in ("time", "customer", "route", "ms", "cost_usd", "message")}

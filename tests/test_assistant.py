@@ -7,6 +7,7 @@ import pytest
 
 from app.assistant import Assistant, build_prompt
 from app.cache import AnswerCache
+from app.feedback import FeedbackLog
 from app.gateway import ModelGateway
 from app.handoff import HandoffQueue
 from app.monitoring import RequestLog
@@ -30,6 +31,7 @@ def make(provider, chunks=(), router=ROUTER, handoffs=None, returns=None, monito
         returns=returns or ReturnDesk(tmp / "returns.jsonl"),
         handoffs=handoffs or HandoffQueue(tmp / "handoffs.jsonl"),
         monitor=monitor or RequestLog(tmp / "requests.jsonl"),
+        feedback=FeedbackLog(tmp / "feedback.jsonl"),
     )
 
 
@@ -208,3 +210,12 @@ def test_payment_problems_go_straight_to_a_person():
     provider = FakeProvider("should not be called")
     reply = make(provider, router=FakeProvider("needs_human")).answer("I was charged twice", "Riya")
     assert "ticket HT-" in reply.text and provider.calls == []
+
+
+def test_rephrasing_and_frustration_are_logged_as_implicit_feedback():
+    assistant = make(FakeProvider("ok [returns.md]"), [RETURNS])
+    assistant.answer("can I return my X2", "Riya")
+    assistant.answer("can I return my X2 headphones please", "Riya")
+    assistant.answer("that's wrong, I want a human", "Riya")
+    signals = [f["signal"] for f in assistant.feedback.read()]
+    assert signals == ["rephrased", "frustrated"]

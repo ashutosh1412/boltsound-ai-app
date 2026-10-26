@@ -5,6 +5,7 @@ from pathlib import Path
 from app.assistant import Assistant
 from app.cache import AnswerCache
 from app.config import Settings
+from app.feedback import FeedbackLog
 from app.gateway import ModelGateway
 from app.handoff import HandoffQueue
 from app.monitoring import RequestLog
@@ -35,4 +36,5 @@ def build_assistant(settings: Settings, log_dir: Path = LOG_DIR) -> Assistant:
         returns=ReturnDesk(log_dir / "returns.jsonl"),
         handoffs=HandoffQueue(log_dir / "handoffs.jsonl"),
         monitor=RequestLog(log_dir / "requests.jsonl"),
+        feedback=FeedbackLog(log_dir / "feedback.jsonl"),
     )

@@ -6,6 +6,7 @@ from typing import Protocol
 import numpy as np
 
 from app.cache import AnswerCache
+from app.feedback import FeedbackLog, implicit_signal
 from app.guardrails import (
     check_output,
     looks_like_prompt_attack,
@@ -70,6 +71,7 @@ class Assistant:
         returns: ReturnDesk,
         handoffs: HandoffQueue,
         monitor: RequestLog,
+        feedback: FeedbackLog,
     ) -> None:
         self.provider = provider
         self.router = router
@@ -79,14 +81,24 @@ class Assistant:
         self.returns = returns
         self.handoffs = handoffs
         self.monitor = monitor
+        self.feedback = feedback
+        self._last_message: dict[str, str] = {}  # per customer, to spot implicit feedback
         # Returns waiting for the customer's YES. In real life: a session store such as Redis.
         self._pending: dict[str, ReturnRequest] = {}
 
     def answer(self, message: str, customer: str) -> Reply:
         reply = Reply(text="", masked_message=mask_personal_data(message)[0])
+        if signal := implicit_signal(self._last_message.get(customer), reply.masked_message):
+            previous = self._last_message[customer] if signal == "rephrased" else reply.masked_message
+            self.feedback.record(customer, previous, signal, kind="implicit")
+        self._last_message[customer] = reply.masked_message
         reply.text = self._respond(message, customer, reply)
         self.monitor.record(customer, reply)
         return reply
+
+    def rate(self, customer: str, reply: Reply, thumbs_up: bool) -> None:
+        """Explicit feedback from the 👍 / 👎 buttons."""
+        self.feedback.record(customer, reply.masked_message, "up" if thumbs_up else "down", kind="explicit")
 
     def _respond(self, message: str, customer: str, reply: Reply) -> str:
         pending = self._pending.pop(customer, None)  # an offer is only valid for the very next message
@@ -102,7 +114,7 @@ class Assistant:
         if route is Route.SMALL_TALK:
             return SMALL_TALK_REPLY
         if route is Route.NEEDS_HUMAN:
-            return self._hand_over(customer, message, "needs a person (payment/complaint)", reply)
+            return self._hand_over(customer, message, "needs a person", reply)
         if route is Route.ORDER_STATUS and (status := self._order_status(message, customer, reply)):
             return status
         if route is Route.RETURN_REQUEST and (offer := self._offer_return(message, customer, reply)):
