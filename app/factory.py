@@ -1,5 +1,7 @@
 """Wire the assistant together from settings (one place to change providers)."""
 
+from pathlib import Path
+
 from app.assistant import Assistant
 from app.cache import AnswerCache
 from app.config import Settings
@@ -12,8 +14,10 @@ from app.retrieval import Retriever, load_chunks
 from app.returns import ReturnDesk
 from app.tools import OrderStore
 
+LOG_DIR = Path(__file__).resolve().parents[1] / "logs"
 
-def build_assistant(settings: Settings) -> Assistant:
+
+def build_assistant(settings: Settings, log_dir: Path = LOG_DIR) -> Assistant:
     providers = [
         GeminiProvider(
             settings.gemini_api_key, settings.main_model, settings.timeout_s, settings.thinking_level
@@ -28,7 +32,7 @@ def build_assistant(settings: Settings) -> Assistant:
         retriever=Retriever(settings.gemini_api_key, load_chunks()),
         orders=OrderStore(),
         cache=AnswerCache(judge=router),
-        returns=ReturnDesk(),
-        handoffs=HandoffQueue(),
-        monitor=RequestLog(),
+        returns=ReturnDesk(log_dir / "returns.jsonl"),
+        handoffs=HandoffQueue(log_dir / "handoffs.jsonl"),
+        monitor=RequestLog(log_dir / "requests.jsonl"),
     )

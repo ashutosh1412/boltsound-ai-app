@@ -12,13 +12,11 @@ import numpy as np
 
 from app.types import Reply
 
-REQUESTS_FILE = Path(__file__).resolve().parents[1] / "logs" / "requests.jsonl"
-
 
 class RequestLog:
     """In real life these lines go to a log/trace system (e.g. OpenTelemetry, Langfuse, Datadog)."""
 
-    def __init__(self, path: Path = REQUESTS_FILE) -> None:
+    def __init__(self, path: Path) -> None:
         self.path = path
 
     def record(self, customer: str, reply: Reply) -> None:

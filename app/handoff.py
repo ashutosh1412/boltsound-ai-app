@@ -6,8 +6,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-HANDOFF_FILE = Path(__file__).resolve().parents[1] / "logs" / "handoffs.jsonl"
-
 
 @dataclass(frozen=True)
 class Ticket:
@@ -21,7 +19,7 @@ class Ticket:
 class HandoffQueue:
     """A file-backed queue. In real life this would create a ticket in Zendesk, Freshdesk, etc."""
 
-    def __init__(self, path: Path = HANDOFF_FILE) -> None:
+    def __init__(self, path: Path) -> None:
         self.path = path
 
     def create(self, customer: str, message: str, reason: str) -> Ticket:

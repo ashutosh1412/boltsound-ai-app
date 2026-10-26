@@ -7,7 +7,6 @@ from pathlib import Path
 from uuid import uuid4
 
 RETURN_WINDOW_DAYS = 30
-RETURNS_FILE = Path(__file__).resolve().parents[1] / "logs" / "returns.jsonl"
 CONFIRM_WORDS = {"yes", "y", "confirm", "yes please", "yes confirm"}
 
 
@@ -36,7 +35,7 @@ def is_confirmation(message: str) -> bool:
 class ReturnDesk:
     """Creates return requests. In real life: the order system's API."""
 
-    def __init__(self, path: Path = RETURNS_FILE) -> None:
+    def __init__(self, path: Path) -> None:
         self.path = path
 
     def existing(self, order_id: str) -> str | None:
