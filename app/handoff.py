@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -30,7 +30,7 @@ class HandoffQueue:
             customer=customer,
             message=message,
             reason=reason,
-            created_at=datetime.now(UTC).isoformat(timespec="seconds"),
+            created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         )
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a") as f:

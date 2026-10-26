@@ -2,6 +2,7 @@
 
 from openai import OpenAI
 
+from app.pricing import estimate_cost
 from app.providers.base import ProviderError
 from app.types import Completion
 
@@ -19,10 +20,12 @@ class OpenAIProvider:
             response = self._client.responses.create(model=self._model, instructions=system, input=prompt)
         except Exception as exc:
             raise ProviderError(f"{self.name} failed: {exc}") from exc
-        usage = response.usage
+        input_tokens = response.usage.input_tokens if response.usage else 0
+        output_tokens = response.usage.output_tokens if response.usage else 0
         return Completion(
             text=response.output_text or "",
             model=self.name,
-            input_tokens=usage.input_tokens if usage else 0,
-            output_tokens=usage.output_tokens if usage else 0,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=estimate_cost(self._model, input_tokens, output_tokens),
         )

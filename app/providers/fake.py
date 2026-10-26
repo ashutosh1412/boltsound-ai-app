@@ -7,8 +7,11 @@ from app.types import Completion
 
 
 class FakeProvider:
-    def __init__(self, reply: str | Callable[[str, str], str] = "OK", name: str = "fake") -> None:
+    def __init__(
+        self, reply: str | Callable[[str, str], str] = "OK", name: str = "fake", cost_usd: float = 0.0
+    ) -> None:
         self.name = name
+        self.cost_usd = cost_usd
         self._reply = reply
         self.calls: list[tuple[str, str]] = []
 
@@ -16,7 +19,11 @@ class FakeProvider:
         self.calls.append((system, prompt))
         text = self._reply(system, prompt) if callable(self._reply) else self._reply
         return Completion(
-            text=text, model=self.name, input_tokens=len(prompt) // 4, output_tokens=len(text) // 4
+            text=text,
+            model=self.name,
+            input_tokens=len(prompt) // 4,
+            output_tokens=len(text) // 4,
+            cost_usd=self.cost_usd,
         )
 
 

@@ -20,5 +20,5 @@ def build_assistant(settings: Settings) -> Assistant:
         providers.append(OpenAIProvider(settings.openai_api_key, settings.fallback_model, settings.timeout_s))
     provider = ModelGateway(providers)
     retriever = Retriever(settings.gemini_api_key, load_chunks())
-    guard = GeminiProvider(settings.gemini_api_key, settings.small_model)
-    return Assistant(provider, settings, retriever, OrderStore(), guard, HandoffQueue())
+    router = GeminiProvider(settings.gemini_api_key, settings.small_model, settings.timeout_s)
+    return Assistant(provider, settings, retriever, OrderStore(), router, HandoffQueue())

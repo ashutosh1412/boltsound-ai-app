@@ -6,7 +6,6 @@ from typing import Protocol
 from app.config import Settings
 from app.guardrails import (
     check_output,
-    guard_model_says_attack,
     looks_like_prompt_attack,
     mask_personal_data,
     wants_handover,
@@ -14,10 +13,14 @@ from app.guardrails import (
 from app.handoff import HandoffQueue
 from app.providers.base import LLMProvider, ProviderError
 from app.retrieval import Chunk
+from app.router import ROUTER_PROMPT, Route, parse_route
 from app.tools import OrderStore, find_order_ids
 from app.types import Completion, Reply, TraceStep
 
 BLOCKED_REPLY = "Sorry, I can't help with that. I can help with orders, returns, warranty and our products."
+SMALL_TALK_REPLY = (
+    "Hi! I'm Bolt, BoltSound's assistant. I can help with orders, returns, warranty and our products."
+)
 
 SYSTEM_PROMPT = (
     "You are BoltSound's friendly customer support assistant. "
@@ -43,21 +46,27 @@ class Assistant:
         settings: Settings,
         retriever: Searcher,
         orders: OrderStore,
-        guard: LLMProvider,
+        router: LLMProvider,
         handoffs: HandoffQueue,
     ) -> None:
         self.provider = provider
         self.handoffs = handoffs
-        self.guard = guard
+        self.router = router
         self.settings = settings
         self.retriever = retriever
         self.orders = orders
 
     def answer(self, message: str, customer: str) -> Reply:
         reply = Reply(text="")
-        message, allowed = self._guard_input(message, reply)
-        if not allowed:
+        message, route = self._guard_and_route(message, reply)
+        if route is Route.ATTACK:
             reply.text = BLOCKED_REPLY
+            return reply
+        if route is Route.SMALL_TALK:
+            reply.text = SMALL_TALK_REPLY
+            return reply
+        if route is Route.ORDER_STATUS and (status := self._order_status(message, customer, reply)):
+            reply.text = status
             return reply
         chunks = self._retrieve(message, reply)
         order_facts = self._look_up_orders(message, customer, reply)
@@ -92,17 +101,39 @@ class Assistant:
             prompt += RETRY_HINT.format(problem=problem, sources=", ".join(sorted(allowed)) or "none")
         return ""
 
-    def _guard_input(self, message: str, reply: Reply) -> tuple[str, bool]:
+    def _guard_and_route(self, message: str, reply: Reply) -> tuple[str, Route]:
         start = time.perf_counter()
         masked, found = mask_personal_data(message)
-        if looks_like_prompt_attack(masked) or guard_model_says_attack(self.guard, masked):
-            ms = (time.perf_counter() - start) * 1000
-            reply.trace.append(TraceStep("input guard", "prompt attack blocked", ms=ms, status="blocked"))
-            return masked, False
-        detail = f"masked: {', '.join(found)}" if found else "clean"
+        if looks_like_prompt_attack(masked):
+            route = Route.ATTACK
+        else:
+            decision = self.router.complete(ROUTER_PROMPT, masked)
+            reply.cost_usd += decision.cost_usd
+            route = parse_route(decision.text)
         ms = (time.perf_counter() - start) * 1000
-        reply.trace.append(TraceStep("input guard", detail, ms=ms, status="warn" if found else "ok"))
-        return masked, True
+        if route is Route.ATTACK:
+            reply.trace.append(TraceStep("input guard", "prompt attack blocked", ms=ms, status="blocked"))
+        else:
+            detail = f"masked: {', '.join(found)} · " if found else ""
+            reply.trace.append(
+                TraceStep(
+                    "input guard", detail + f"route: {route.value}", ms=ms, status="warn" if found else "ok"
+                )
+            )
+        return masked, route
+
+    def _order_status(self, message: str, customer: str, reply: Reply) -> str | None:
+        """Simple 'where is my order?' needs no big model: answer from the order data."""
+        lines = []
+        for order_id in find_order_ids(message):
+            order = self.orders.find_order(order_id, customer)
+            if order is None:
+                return None  # unknown or someone else's order: let the full path handle it
+            lines.append(f"Your order {order_id} ({order['product']}) is {order['status']}.")
+        if not lines:
+            return None
+        reply.trace.append(TraceStep("tool:get_order", "answered from order data, no model call"))
+        return " ".join(lines) + " Track it at boltsound.in/track. [orders]"
 
     def _retrieve(self, message: str, reply: Reply) -> list[Chunk]:
         start = time.perf_counter()
@@ -123,20 +154,13 @@ class Assistant:
     def _call_model(self, system: str, prompt: str, reply: Reply) -> Completion:
         start = time.perf_counter()
         completion = self.provider.complete(system, prompt)
-        reply.cost_usd += self._cost(completion)
+        reply.cost_usd += completion.cost_usd
         detail = f"{completion.model} · {completion.input_tokens}→{completion.output_tokens} tokens"
         if completion.failures:
             detail += " · after failures: " + ", ".join(completion.failures)
         ms = (time.perf_counter() - start) * 1000
         reply.trace.append(TraceStep("model", detail, ms=ms, status="warn" if completion.failures else "ok"))
         return completion
-
-    def _cost(self, completion: Completion) -> float:
-        settings = self.settings
-        return (
-            completion.input_tokens * settings.price_in_per_m
-            + completion.output_tokens * settings.price_out_per_m
-        ) / 1e6
 
 
 def build_prompt(message: str, chunks: list[Chunk], order_facts: list[str] | None = None) -> str:
