@@ -32,6 +32,8 @@ class Reply:
     text: str
     trace: list[TraceStep] = field(default_factory=list)
     cost_usd: float = 0.0
+    route: str = ""
+    masked_message: str = ""  # what we log: never the raw text
 
     @property
     def total_ms(self) -> float:

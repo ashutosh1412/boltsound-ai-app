@@ -6,7 +6,6 @@ from typing import Protocol
 import numpy as np
 
 from app.cache import AnswerCache
-from app.config import Settings
 from app.guardrails import (
     check_output,
     looks_like_prompt_attack,
@@ -14,6 +13,7 @@ from app.guardrails import (
     wants_handover,
 )
 from app.handoff import HandoffQueue
+from app.monitoring import RequestLog
 from app.providers.base import LLMProvider, ProviderError
 from app.retrieval import Chunk
 from app.returns import ReturnDesk, ReturnRequest, is_confirmation, reason_cannot_return
@@ -61,49 +61,53 @@ class Searcher(Protocol):
 class Assistant:
     def __init__(
         self,
+        *,
         provider: LLMProvider,
-        settings: Settings,
+        router: LLMProvider,
         retriever: Searcher,
         orders: OrderStore,
-        router: LLMProvider,
-        handoffs: HandoffQueue,
         cache: AnswerCache,
         returns: ReturnDesk,
+        handoffs: HandoffQueue,
+        monitor: RequestLog,
     ) -> None:
         self.provider = provider
-        self.returns = returns
-        # Returns waiting for the customer's YES. In real life: a session store such as Redis.
-        self._pending: dict[str, ReturnRequest] = {}
-        self.cache = cache
-        self.handoffs = handoffs
         self.router = router
-        self.settings = settings
         self.retriever = retriever
         self.orders = orders
+        self.cache = cache
+        self.returns = returns
+        self.handoffs = handoffs
+        self.monitor = monitor
+        # Returns waiting for the customer's YES. In real life: a session store such as Redis.
+        self._pending: dict[str, ReturnRequest] = {}
 
     def answer(self, message: str, customer: str) -> Reply:
-        reply = Reply(text="")
+        reply = Reply(text="", masked_message=mask_personal_data(message)[0])
+        reply.text = self._respond(message, customer, reply)
+        self.monitor.record(customer, reply)
+        return reply
+
+    def _respond(self, message: str, customer: str, reply: Reply) -> str:
         pending = self._pending.pop(customer, None)  # an offer is only valid for the very next message
         if pending and is_confirmation(message):
             return_id = self.returns.create(pending)
             reply.trace.append(TraceStep("action:create_return", f"{return_id} for {pending.order_id}"))
-            reply.text = RETURN_DONE.format(return_id=return_id, order_id=pending.order_id)
-            return reply
+            reply.route = "confirm_return"
+            return RETURN_DONE.format(return_id=return_id, order_id=pending.order_id)
         message, route = self._guard_and_route(message, reply)
+        reply.route = route.value
         if route is Route.ATTACK:
-            reply.text = BLOCKED_REPLY
-            return reply
+            return BLOCKED_REPLY
         if route is Route.SMALL_TALK:
-            reply.text = SMALL_TALK_REPLY
-            return reply
+            return SMALL_TALK_REPLY
+        if route is Route.NEEDS_HUMAN:
+            return self._hand_over(customer, message, "needs a person (payment/complaint)", reply)
         if route is Route.ORDER_STATUS and (status := self._order_status(message, customer, reply)):
-            reply.text = status
-            return reply
+            return status
         if route is Route.RETURN_REQUEST and (offer := self._offer_return(message, customer, reply)):
-            reply.text = offer
-            return reply
-        reply.text = self._answer_question(message, customer, reply)
-        return reply
+            return offer
+        return self._answer_question(message, customer, reply)
 
     def _offer_return(self, message: str, customer: str, reply: Reply) -> str | None:
         """Check the rules in code, then ask the customer to confirm. Nothing happens without YES."""
@@ -130,7 +134,11 @@ class Assistant:
     def _answer_question(self, message: str, customer: str, reply: Reply) -> str:
         """The full path: cache → retrieval + order data → model → output guard → (handover)."""
         order_facts = self._look_up_orders(message, customer, reply)
+        start = time.perf_counter()
         vector = self.retriever.embed(message)
+        reply.trace.append(
+            TraceStep("embedding", "question → vector", ms=(time.perf_counter() - start) * 1000)
+        )
         # Only general answers are shared. An answer built from someone's order is theirs alone.
         shareable = not order_facts
         if shareable and (hit := self.cache.get(message, vector)):
@@ -149,12 +157,15 @@ class Assistant:
             reply.trace.append(TraceStep("model", str(exc), ms=ms, status="error"))
             answer, reason = "", "models unavailable"
         if wants_handover(answer) or not answer:
-            ticket = self.handoffs.create(customer, message, reason=reason)
-            reply.trace.append(TraceStep("handover", f"ticket {ticket.id} created", status="warn"))
-            return HANDOVER_REPLY.format(ticket=ticket.id)
+            return self._hand_over(customer, message, reason, reply)
         if shareable:
             self.cache.put(message, vector, answer)
         return answer
+
+    def _hand_over(self, customer: str, message: str, reason: str, reply: Reply) -> str:
+        ticket = self.handoffs.create(customer, message, reason=reason)
+        reply.trace.append(TraceStep("handover", f"ticket {ticket.id} created ({reason})", status="warn"))
+        return HANDOVER_REPLY.format(ticket=ticket.id)
 
     def _answer_checked(self, prompt: str, allowed: set[str], reply: Reply) -> str:
         """Call the model, check its answer, retry once with feedback, else hand over ('' = give up)."""

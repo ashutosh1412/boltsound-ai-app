@@ -3,7 +3,7 @@
 import re
 
 PERSONAL_DATA_PATTERNS = {
-    "card": re.compile(r"\b(?:\d[ -]?){13,19}\b"),
+    "card": re.compile(r"\b\d(?:[ -]?\d){12,18}\b"),
     "email": re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]+\b"),
     "phone": re.compile(r"(?:\+91[ -]?)?\b[6-9]\d{4}[ -]?\d{5}\b"),
 }

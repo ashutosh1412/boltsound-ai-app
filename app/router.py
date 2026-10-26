@@ -8,6 +8,7 @@ class Route(str, Enum):
     ORDER_STATUS = "order_status"  # only asks where an order is
     RETURN_REQUEST = "return_request"  # wants to return an order / get a refund for it
     QUESTION = "question"  # needs the help centre (returns, warranty, products...)
+    NEEDS_HUMAN = "needs_human"  # payment problems, complaints, legal: a person must handle it
     SMALL_TALK = "small_talk"  # greetings, thanks, off-topic requests
 
 
@@ -18,6 +19,8 @@ ROUTER_PROMPT = (
     "order_status - only asks where an order is or whether it shipped\n"
     "return_request - wants to return a specific order or get a refund for it\n"
     "question - anything about returns, refunds, warranty, shipping, products or problems\n"
+    "needs_human - payment or billing problems (double charge, failed payment), complaints, legal "
+    "threats, or account security\n"
     "small_talk - greetings, thanks, or requests unrelated to the shop"
 )
 

@@ -28,3 +28,7 @@ def test_check_output_rejects_missing_or_invented_sources():
 
 def test_check_output_rejects_personal_data():
     assert check_output("Call Arjun on 98765 43210. [orders]", {"orders"}) == "answer contains personal data"
+
+
+def test_masking_keeps_the_text_around_it():
+    assert mask_personal_data("My card 4111 1111 1111 1111 was charged")[0] == "My card [CARD] was charged"

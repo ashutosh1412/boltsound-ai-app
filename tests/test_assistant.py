@@ -1,3 +1,4 @@
+import json
 import tempfile
 from pathlib import Path
 
@@ -6,39 +7,29 @@ import pytest
 
 from app.assistant import Assistant, build_prompt
 from app.cache import AnswerCache
-from app.config import Settings
 from app.gateway import ModelGateway
 from app.handoff import HandoffQueue
+from app.monitoring import RequestLog
 from app.providers.fake import DownProvider, FakeProvider
 from app.retrieval import Chunk
 from app.returns import ReturnDesk
 from app.tools import OrderStore
 
-SETTINGS = Settings(
-    gemini_api_key="",
-    openai_api_key="",
-    main_model="fake",
-    small_model="fake-small",
-    fallback_model="fake-backup",
-    timeout_s=10,
-    thinking_level="low",
-)
 ROUTER = FakeProvider("question")
 RETURNS = Chunk("returns.md", "Returns within 30 days.")
 
 
-def make(provider, chunks=(), router=ROUTER, handoffs=None, returns=None):
-    handoffs = handoffs or HandoffQueue(Path(tempfile.mkdtemp()) / "handoffs.jsonl")
-    returns = returns or ReturnDesk(Path(tempfile.mkdtemp()) / "returns.jsonl")
+def make(provider, chunks=(), router=ROUTER, handoffs=None, returns=None, monitor=None):
+    tmp = Path(tempfile.mkdtemp())
     return Assistant(
-        provider,
-        SETTINGS,
-        FakeRetriever(list(chunks)),
-        OrderStore(),
-        router,
-        handoffs,
-        AnswerCache(judge=FakeProvider("no")),
-        returns,
+        provider=provider,
+        router=router,
+        retriever=FakeRetriever(list(chunks)),
+        orders=OrderStore(),
+        cache=AnswerCache(judge=FakeProvider("no")),
+        returns=returns or ReturnDesk(tmp / "returns.jsonl"),
+        handoffs=handoffs or HandoffQueue(tmp / "handoffs.jsonl"),
+        monitor=monitor or RequestLog(tmp / "requests.jsonl"),
     )
 
 
@@ -58,7 +49,13 @@ def test_answer_uses_retrieved_extracts():
     reply = make(provider, [RETURNS]).answer("Can I return it?", "Riya")
     assert "30 days" in provider.calls[0][1]
     assert reply.text.endswith("[returns.md]")
-    assert [step.name for step in reply.trace] == ["input guard", "retrieval", "model", "output guard"]
+    assert [step.name for step in reply.trace] == [
+        "input guard",
+        "embedding",
+        "retrieval",
+        "model",
+        "output guard",
+    ]
 
 
 def test_order_ids_trigger_the_order_tool():
@@ -195,3 +192,19 @@ def test_the_same_order_is_never_returned_twice(tmp_path):
     again = assistant.answer("Refund BS-2291", "Riya")
     assert "already has a return" in again.text
     assert returns.path.read_text().count("\n") == 1
+
+
+def test_every_answer_is_logged_without_personal_data(tmp_path):
+    monitor = RequestLog(tmp_path / "requests.jsonl")
+    make(FakeProvider("ok [returns.md]"), [RETURNS], monitor=monitor).answer(
+        "My card 4111 1111 1111 1111 was charged twice", "Riya"
+    )
+    (record,) = monitor.read()
+    assert record["route"] == "question"
+    assert "4111" not in json.dumps(record)
+
+
+def test_payment_problems_go_straight_to_a_person():
+    provider = FakeProvider("should not be called")
+    reply = make(provider, router=FakeProvider("needs_human")).answer("I was charged twice", "Riya")
+    assert "ticket HT-" in reply.text and provider.calls == []

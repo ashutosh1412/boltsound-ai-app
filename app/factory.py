@@ -5,6 +5,7 @@ from app.cache import AnswerCache
 from app.config import Settings
 from app.gateway import ModelGateway
 from app.handoff import HandoffQueue
+from app.monitoring import RequestLog
 from app.providers.gemini import GeminiProvider
 from app.providers.openai_provider import OpenAIProvider
 from app.retrieval import Retriever, load_chunks
@@ -20,16 +21,14 @@ def build_assistant(settings: Settings) -> Assistant:
     ]
     if settings.openai_api_key:  # a second company, so one outage can't take us down
         providers.append(OpenAIProvider(settings.openai_api_key, settings.fallback_model, settings.timeout_s))
-    provider = ModelGateway(providers)
-    retriever = Retriever(settings.gemini_api_key, load_chunks())
     router = GeminiProvider(settings.gemini_api_key, settings.small_model, settings.timeout_s)
     return Assistant(
-        provider,
-        settings,
-        retriever,
-        OrderStore(),
-        router,
-        HandoffQueue(),
-        AnswerCache(judge=router),
-        ReturnDesk(),
+        provider=ModelGateway(providers),
+        router=router,
+        retriever=Retriever(settings.gemini_api_key, load_chunks()),
+        orders=OrderStore(),
+        cache=AnswerCache(judge=router),
+        returns=ReturnDesk(),
+        handoffs=HandoffQueue(),
+        monitor=RequestLog(),
     )
