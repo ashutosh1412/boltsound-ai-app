@@ -17,6 +17,9 @@ class OrderStore:
         order = self._orders.get(order_id)
         return order if order and order["customer"] == customer else None
 
+    def order_ids_for(self, customer: str) -> list[str]:
+        return [order_id for order_id, order in self._orders.items() if order["customer"] == customer]
+
 
 def find_order_ids(message: str) -> list[str]:
     return [f"BS-{digits}" for digits in ORDER_ID_PATTERN.findall(message)]

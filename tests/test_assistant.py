@@ -11,6 +11,7 @@ from app.gateway import ModelGateway
 from app.handoff import HandoffQueue
 from app.providers.fake import DownProvider, FakeProvider
 from app.retrieval import Chunk
+from app.returns import ReturnDesk
 from app.tools import OrderStore
 
 SETTINGS = Settings(
@@ -26,8 +27,9 @@ ROUTER = FakeProvider("question")
 RETURNS = Chunk("returns.md", "Returns within 30 days.")
 
 
-def make(provider, chunks=(), router=ROUTER, handoffs=None):
+def make(provider, chunks=(), router=ROUTER, handoffs=None, returns=None):
     handoffs = handoffs or HandoffQueue(Path(tempfile.mkdtemp()) / "handoffs.jsonl")
+    returns = returns or ReturnDesk(Path(tempfile.mkdtemp()) / "returns.jsonl")
     return Assistant(
         provider,
         SETTINGS,
@@ -36,6 +38,7 @@ def make(provider, chunks=(), router=ROUTER, handoffs=None):
         router,
         handoffs,
         AnswerCache(judge=FakeProvider("no")),
+        returns,
     )
 
 
@@ -144,3 +147,51 @@ def test_answers_with_order_data_are_never_cached():
     assistant.answer("Can I return BS-2291?", "Riya")
     assistant.answer("Can I return BS-2291?", "Riya")
     assert len(provider.calls) == 2
+
+
+def test_return_needs_an_explicit_yes(tmp_path):
+    provider = FakeProvider("should not be called")
+    returns = ReturnDesk(tmp_path / "returns.jsonl")
+    assistant = make(provider, router=FakeProvider("return_request"), returns=returns)
+    offer = assistant.answer("Refund my order BS-2291", "Riya")
+    assert "Reply YES" in offer.text and not returns.path.exists()
+    done = assistant.answer("yes", "Riya")
+    assert "Return RT-" in done.text
+    assert "BS-2291" in returns.path.read_text()
+    assert provider.calls == []
+
+
+def test_anything_but_yes_cancels_the_offer(tmp_path):
+    returns = ReturnDesk(tmp_path / "returns.jsonl")
+    assistant = make(FakeProvider("ok [orders]"), router=FakeProvider("return_request"), returns=returns)
+    assistant.answer("Refund my order BS-2291", "Riya")
+    assistant.answer("hmm, how long does it take?", "Riya")
+    assistant.answer("yes", "Riya")
+    assert not returns.path.exists()
+
+
+def test_return_window_is_enforced_in_code():
+    reply = make(FakeProvider("x"), router=FakeProvider("return_request")).answer("Refund BS-3310", "Arjun")
+    assert "can't be returned" in reply.text and "45 days" in reply.text
+
+
+def test_return_of_someone_elses_order_is_refused_without_the_model():
+    provider = FakeProvider("should not be called")
+    reply = make(provider, router=FakeProvider("return_request")).answer("Refund BS-3310", "Riya")
+    assert "can't find BS-3310 on your account" in reply.text
+    assert provider.calls == []
+
+
+def test_return_without_an_order_number_lists_their_orders():
+    reply = make(FakeProvider("x"), router=FakeProvider("return_request")).answer("I want a refund", "Riya")
+    assert "BS-2291" in reply.text and "BS-3310" not in reply.text
+
+
+def test_the_same_order_is_never_returned_twice(tmp_path):
+    returns = ReturnDesk(tmp_path / "returns.jsonl")
+    assistant = make(FakeProvider("x"), router=FakeProvider("return_request"), returns=returns)
+    assistant.answer("Refund BS-2291", "Riya")
+    assistant.answer("yes", "Riya")
+    again = assistant.answer("Refund BS-2291", "Riya")
+    assert "already has a return" in again.text
+    assert returns.path.read_text().count("\n") == 1

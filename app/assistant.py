@@ -16,6 +16,7 @@ from app.guardrails import (
 from app.handoff import HandoffQueue
 from app.providers.base import LLMProvider, ProviderError
 from app.retrieval import Chunk
+from app.returns import ReturnDesk, ReturnRequest, is_confirmation, reason_cannot_return
 from app.router import ROUTER_PROMPT, Route, parse_route
 from app.tools import OrderStore, find_order_ids
 from app.types import Completion, Reply, TraceStep
@@ -33,6 +34,19 @@ SYSTEM_PROMPT = (
 )
 
 RETRY_HINT = "\n\nYour last answer was rejected ({problem}). Answer again and end with one of: {sources}."
+RETURN_OFFER = (
+    "I can start a return for {order_id} ({product}, ₹{amount:,}). After we receive it, the refund goes to "
+    "your original payment method within 5–7 working days. Reply YES to confirm. [returns.md]"
+)
+RETURN_DONE = (
+    "Done! Return {return_id} is created for {order_id}. We'll email you a pickup slot. [returns.md]"
+)
+RETURN_REFUSED = (
+    "Sorry, {order_id} can't be returned: {reason}. Warranty claims are still possible. [returns.md]"
+)
+ALREADY_RETURNED = "{order_id} already has a return in progress ({return_id}). [orders]"
+WHICH_ORDER = "Which order would you like to return? Orders on your account: {orders}. [orders]"
+NOT_YOUR_ORDER = "I can't find {order_id} on your account. Please check the order number. [orders]"
 HANDOVER_REPLY = (
     "I've passed this to our support team (ticket {ticket}). A person will reply within 24 hours."
 )
@@ -54,8 +68,12 @@ class Assistant:
         router: LLMProvider,
         handoffs: HandoffQueue,
         cache: AnswerCache,
+        returns: ReturnDesk,
     ) -> None:
         self.provider = provider
+        self.returns = returns
+        # Returns waiting for the customer's YES. In real life: a session store such as Redis.
+        self._pending: dict[str, ReturnRequest] = {}
         self.cache = cache
         self.handoffs = handoffs
         self.router = router
@@ -65,6 +83,12 @@ class Assistant:
 
     def answer(self, message: str, customer: str) -> Reply:
         reply = Reply(text="")
+        pending = self._pending.pop(customer, None)  # an offer is only valid for the very next message
+        if pending and is_confirmation(message):
+            return_id = self.returns.create(pending)
+            reply.trace.append(TraceStep("action:create_return", f"{return_id} for {pending.order_id}"))
+            reply.text = RETURN_DONE.format(return_id=return_id, order_id=pending.order_id)
+            return reply
         message, route = self._guard_and_route(message, reply)
         if route is Route.ATTACK:
             reply.text = BLOCKED_REPLY
@@ -75,8 +99,33 @@ class Assistant:
         if route is Route.ORDER_STATUS and (status := self._order_status(message, customer, reply)):
             reply.text = status
             return reply
+        if route is Route.RETURN_REQUEST and (offer := self._offer_return(message, customer, reply)):
+            reply.text = offer
+            return reply
         reply.text = self._answer_question(message, customer, reply)
         return reply
+
+    def _offer_return(self, message: str, customer: str, reply: Reply) -> str | None:
+        """Check the rules in code, then ask the customer to confirm. Nothing happens without YES."""
+        order_ids = find_order_ids(message)
+        if not order_ids:
+            return WHICH_ORDER.format(orders=", ".join(self.orders.order_ids_for(customer)) or "none")
+        if len(order_ids) > 1:
+            return None  # several orders in one message: let the normal path explain
+        order_id = order_ids[0]
+        if (order := self.orders.find_order(order_id, customer)) is None:
+            reply.trace.append(
+                TraceStep("tool:get_order", f"{order_id}: not on {customer}'s account", status="warn")
+            )
+            return NOT_YOUR_ORDER.format(order_id=order_id)
+        if return_id := self.returns.existing(order_id):
+            return ALREADY_RETURNED.format(order_id=order_id, return_id=return_id)
+        if reason := reason_cannot_return(order):
+            reply.trace.append(TraceStep("rule:return_window", f"{order_id}: {reason}", status="blocked"))
+            return RETURN_REFUSED.format(order_id=order_id, reason=reason)
+        self._pending[customer] = ReturnRequest(order_id, customer, order["product"], order["price"])
+        reply.trace.append(TraceStep("rule:return_window", f"{order_id}: eligible, waiting for YES"))
+        return RETURN_OFFER.format(order_id=order_id, product=order["product"], amount=order["price"])
 
     def _answer_question(self, message: str, customer: str, reply: Reply) -> str:
         """The full path: cache → retrieval + order data → model → output guard → (handover)."""
