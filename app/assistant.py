@@ -4,7 +4,14 @@ import time
 from typing import Protocol
 
 from app.config import Settings
-from app.guardrails import guard_model_says_attack, looks_like_prompt_attack, mask_personal_data
+from app.guardrails import (
+    check_output,
+    guard_model_says_attack,
+    looks_like_prompt_attack,
+    mask_personal_data,
+    wants_handover,
+)
+from app.handoff import HandoffQueue
 from app.providers.base import LLMProvider
 from app.retrieval import Chunk
 from app.tools import OrderStore, find_order_ids
@@ -17,6 +24,11 @@ SYSTEM_PROMPT = (
     "BoltSound sells wireless headphones in India. Answer in at most 3 short sentences. "
     "Use ONLY the help-centre extracts provided. If they don't contain the answer, say you'll "
     "connect the customer to a human agent. End with the source file in brackets, e.g. [returns.md]."
+)
+
+RETRY_HINT = "\n\nYour last answer was rejected ({problem}). Answer again and end with one of: {sources}."
+HANDOVER_REPLY = (
+    "I've passed this to our support team (ticket {ticket}). A person will reply within 24 hours."
 )
 
 
@@ -32,8 +44,10 @@ class Assistant:
         retriever: Searcher,
         orders: OrderStore,
         guard: LLMProvider,
+        handoffs: HandoffQueue,
     ) -> None:
         self.provider = provider
+        self.handoffs = handoffs
         self.guard = guard
         self.settings = settings
         self.retriever = retriever
@@ -48,9 +62,28 @@ class Assistant:
         chunks = self._retrieve(message, reply)
         order_facts = self._look_up_orders(message, customer, reply)
         prompt = build_prompt(message, chunks, order_facts)
-        completion = self._call_model(SYSTEM_PROMPT, prompt, reply)
-        reply.text = completion.text.strip()
+        allowed = {chunk.source for chunk in chunks} | ({"orders"} if order_facts else set())
+        reply.text = self._answer_checked(prompt, allowed, reply)
+        if wants_handover(reply.text) or not reply.text:
+            ticket = self.handoffs.create(customer, message, reason="not covered by help centre")
+            reply.trace.append(TraceStep("handover", f"ticket {ticket.id} created", status="warn"))
+            reply.text = HANDOVER_REPLY.format(ticket=ticket.id)
         return reply
+
+    def _answer_checked(self, prompt: str, allowed: set[str], reply: Reply) -> str:
+        """Call the model, check its answer, retry once with feedback, else hand over ('' = give up)."""
+        for attempt in range(2):
+            text = self._call_model(SYSTEM_PROMPT, prompt, reply).text.strip()
+            if wants_handover(text):
+                return text
+            problem = check_output(text, allowed)
+            if problem is None:
+                reply.trace.append(TraceStep("output guard", "source checked"))
+                return text
+            status = "warn" if attempt == 0 else "blocked"
+            reply.trace.append(TraceStep("output guard", problem, status=status))
+            prompt += RETRY_HINT.format(problem=problem, sources=", ".join(sorted(allowed)) or "none")
+        return ""
 
     def _guard_input(self, message: str, reply: Reply) -> tuple[str, bool]:
         start = time.perf_counter()

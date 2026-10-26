@@ -47,3 +47,25 @@ def guard_model_says_attack(guard: LLMProvider, text: str) -> bool:
     """Second line of defence: a small, cheap model judges the message."""
     verdict = guard.complete(GUARD_PROMPT, text).text.strip().upper()
     return verdict.startswith("ATTACK")
+
+
+SOURCE_TAG = re.compile(r"\[([\w.-]+)\]\s*$")
+HANDOVER_WORDS = ("human agent", "connect you", "a colleague")
+
+
+def wants_handover(text: str) -> bool:
+    """The model was told to offer a human when the extracts don't cover the question."""
+    lowered = text.lower()
+    return any(words in lowered for words in HANDOVER_WORDS)
+
+
+def check_output(text: str, allowed_sources: set[str]) -> str | None:
+    """Return a problem description, or None if the answer is safe to send."""
+    match = SOURCE_TAG.search(text)
+    if not match:
+        return "no source cited"
+    if match.group(1) not in allowed_sources:
+        return f"cited [{match.group(1)}], which it was never given"
+    if mask_personal_data(text)[1]:
+        return "answer contains personal data"
+    return None
