@@ -4,10 +4,13 @@ import time
 from typing import Protocol
 
 from app.config import Settings
+from app.guardrails import looks_like_prompt_attack, mask_personal_data
 from app.providers.base import LLMProvider
 from app.retrieval import Chunk
 from app.tools import OrderStore, find_order_ids
 from app.types import Completion, Reply, TraceStep
+
+BLOCKED_REPLY = "Sorry, I can't help with that. I can help with orders, returns, warranty and our products."
 
 SYSTEM_PROMPT = (
     "You are BoltSound's friendly customer support assistant. "
@@ -32,12 +35,25 @@ class Assistant:
 
     def answer(self, message: str, customer: str) -> Reply:
         reply = Reply(text="")
+        message, allowed = self._guard_input(message, reply)
+        if not allowed:
+            reply.text = BLOCKED_REPLY
+            return reply
         chunks = self._retrieve(message, reply)
         order_facts = self._look_up_orders(message, customer, reply)
         prompt = build_prompt(message, chunks, order_facts)
         completion = self._call_model(SYSTEM_PROMPT, prompt, reply)
         reply.text = completion.text.strip()
         return reply
+
+    def _guard_input(self, message: str, reply: Reply) -> tuple[str, bool]:
+        if looks_like_prompt_attack(message):
+            reply.trace.append(TraceStep("input guard", "prompt attack blocked", status="blocked"))
+            return message, False
+        masked, found = mask_personal_data(message)
+        detail = f"masked: {', '.join(found)}" if found else "clean"
+        reply.trace.append(TraceStep("input guard", detail, status="warn" if found else "ok"))
+        return masked, True
 
     def _retrieve(self, message: str, reply: Reply) -> list[Chunk]:
         start = time.perf_counter()

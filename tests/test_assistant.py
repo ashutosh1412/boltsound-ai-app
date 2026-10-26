@@ -23,7 +23,7 @@ def test_answer_uses_retrieved_extracts():
     )
     assert "30 days" in provider.calls[0][1]
     assert reply.text.endswith("[returns.md]")
-    assert [step.name for step in reply.trace] == ["retrieval", "model"]
+    assert [step.name for step in reply.trace] == ["input guard", "retrieval", "model"]
 
 
 def test_order_ids_trigger_the_order_tool():
