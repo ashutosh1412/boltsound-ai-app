@@ -2,7 +2,7 @@ from app.guardrails import check_output, looks_like_prompt_attack, mask_personal
 
 
 def test_mask_pii_hides_phone_email_and_card():
-    text = "Call 98765 43210, mail riya@gmail.com, card 4111 1111 1111 1111"
+    text = "Call 98765 43210, mail riya@example.com, card 4111 1111 1111 1111"
     masked, found = mask_personal_data(text)
     assert masked == "Call [PHONE], mail [EMAIL], card [CARD]"
     assert sorted(found) == ["card", "email", "phone"]
