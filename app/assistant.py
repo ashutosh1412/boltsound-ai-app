@@ -3,6 +3,9 @@
 import time
 from typing import Protocol
 
+import numpy as np
+
+from app.cache import AnswerCache
 from app.config import Settings
 from app.guardrails import (
     check_output,
@@ -36,7 +39,9 @@ HANDOVER_REPLY = (
 
 
 class Searcher(Protocol):
-    def search(self, question: str) -> list[Chunk]: ...
+    def embed(self, text: str) -> np.ndarray: ...
+
+    def search(self, query: np.ndarray) -> list[Chunk]: ...
 
 
 class Assistant:
@@ -48,8 +53,10 @@ class Assistant:
         orders: OrderStore,
         router: LLMProvider,
         handoffs: HandoffQueue,
+        cache: AnswerCache,
     ) -> None:
         self.provider = provider
+        self.cache = cache
         self.handoffs = handoffs
         self.router = router
         self.settings = settings
@@ -68,23 +75,37 @@ class Assistant:
         if route is Route.ORDER_STATUS and (status := self._order_status(message, customer, reply)):
             reply.text = status
             return reply
-        chunks = self._retrieve(message, reply)
+        reply.text = self._answer_question(message, customer, reply)
+        return reply
+
+    def _answer_question(self, message: str, customer: str, reply: Reply) -> str:
+        """The full path: cache → retrieval + order data → model → output guard → (handover)."""
         order_facts = self._look_up_orders(message, customer, reply)
+        vector = self.retriever.embed(message)
+        # Only general answers are shared. An answer built from someone's order is theirs alone.
+        shareable = not order_facts
+        if shareable and (hit := self.cache.get(message, vector)):
+            reply.cost_usd += hit.cost_usd
+            reply.trace.append(TraceStep("cache", f"hit: {hit.how}, no big-model call"))
+            return hit.answer
+        chunks = self._retrieve(vector, reply)
         prompt = build_prompt(message, chunks, order_facts)
         allowed = {chunk.source for chunk in chunks} | ({"orders"} if order_facts else set())
         start = time.perf_counter()
         try:
-            reply.text = self._answer_checked(prompt, allowed, reply)
+            answer = self._answer_checked(prompt, allowed, reply)
             reason = "not covered by help centre"
         except ProviderError as exc:
             ms = (time.perf_counter() - start) * 1000
             reply.trace.append(TraceStep("model", str(exc), ms=ms, status="error"))
-            reply.text, reason = "", "models unavailable"
-        if wants_handover(reply.text) or not reply.text:
+            answer, reason = "", "models unavailable"
+        if wants_handover(answer) or not answer:
             ticket = self.handoffs.create(customer, message, reason=reason)
             reply.trace.append(TraceStep("handover", f"ticket {ticket.id} created", status="warn"))
-            reply.text = HANDOVER_REPLY.format(ticket=ticket.id)
-        return reply
+            return HANDOVER_REPLY.format(ticket=ticket.id)
+        if shareable:
+            self.cache.put(message, vector, answer)
+        return answer
 
     def _answer_checked(self, prompt: str, allowed: set[str], reply: Reply) -> str:
         """Call the model, check its answer, retry once with feedback, else hand over ('' = give up)."""
@@ -135,9 +156,9 @@ class Assistant:
         reply.trace.append(TraceStep("tool:get_order", "answered from order data, no model call"))
         return " ".join(lines) + " Track it at boltsound.in/track. [orders]"
 
-    def _retrieve(self, message: str, reply: Reply) -> list[Chunk]:
+    def _retrieve(self, vector: np.ndarray, reply: Reply) -> list[Chunk]:
         start = time.perf_counter()
-        chunks = self.retriever.search(message)
+        chunks = self.retriever.search(vector)
         sources = ", ".join(sorted({chunk.source for chunk in chunks})) or "nothing found"
         reply.trace.append(TraceStep("retrieval", sources, ms=(time.perf_counter() - start) * 1000))
         return chunks

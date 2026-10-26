@@ -1,6 +1,7 @@
 """Wire the assistant together from settings (one place to change providers)."""
 
 from app.assistant import Assistant
+from app.cache import AnswerCache
 from app.config import Settings
 from app.gateway import ModelGateway
 from app.handoff import HandoffQueue
@@ -21,4 +22,6 @@ def build_assistant(settings: Settings) -> Assistant:
     provider = ModelGateway(providers)
     retriever = Retriever(settings.gemini_api_key, load_chunks())
     router = GeminiProvider(settings.gemini_api_key, settings.small_model, settings.timeout_s)
-    return Assistant(provider, settings, retriever, OrderStore(), router, HandoffQueue())
+    return Assistant(
+        provider, settings, retriever, OrderStore(), router, HandoffQueue(), AnswerCache(judge=router)
+    )

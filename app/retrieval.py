@@ -35,8 +35,11 @@ class Retriever:
         self.top_k = top_k
         self._chunk_vectors = self._embed([chunk.text for chunk in chunks])
 
-    def search(self, question: str) -> list[Chunk]:
-        question_vector = self._embed([question])[0]
+    def embed(self, text: str) -> np.ndarray:
+        return self._embed([text])[0]
+
+    def search(self, question_vector: np.ndarray) -> list[Chunk]:
+        """Top-k chunks for an already-embedded question (cosine similarity)."""
         scores = self._chunk_vectors @ question_vector
         best_first = np.argsort(scores)[::-1][: self.top_k]
         return [self.chunks[i] for i in best_first]

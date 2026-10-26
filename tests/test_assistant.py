@@ -1,9 +1,11 @@
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from app.assistant import Assistant, build_prompt
+from app.cache import AnswerCache
 from app.config import Settings
 from app.gateway import ModelGateway
 from app.handoff import HandoffQueue
@@ -26,14 +28,25 @@ RETURNS = Chunk("returns.md", "Returns within 30 days.")
 
 def make(provider, chunks=(), router=ROUTER, handoffs=None):
     handoffs = handoffs or HandoffQueue(Path(tempfile.mkdtemp()) / "handoffs.jsonl")
-    return Assistant(provider, SETTINGS, FakeRetriever(list(chunks)), OrderStore(), router, handoffs)
+    return Assistant(
+        provider,
+        SETTINGS,
+        FakeRetriever(list(chunks)),
+        OrderStore(),
+        router,
+        handoffs,
+        AnswerCache(judge=FakeProvider("no")),
+    )
 
 
 class FakeRetriever:
     def __init__(self, chunks: list[Chunk]) -> None:
         self.chunks = chunks
 
-    def search(self, question: str) -> list[Chunk]:
+    def embed(self, text: str) -> np.ndarray:
+        return np.ones(3) / np.sqrt(3)  # every question "means the same"
+
+    def search(self, query: np.ndarray) -> list[Chunk]:
         return self.chunks
 
 
@@ -114,3 +127,20 @@ def test_cost_adds_up_every_model_call():
     provider = FakeProvider("Yes. [returns.md]", cost_usd=0.002)
     reply = make(provider, [RETURNS], router=router).answer("Can I return it?", "Riya")
     assert reply.cost_usd == pytest.approx(0.0021)  # router + main model
+
+
+def test_repeated_general_question_is_served_from_cache():
+    provider = FakeProvider("Yes, within 30 days. [returns.md]")
+    assistant = make(provider, [RETURNS])
+    assistant.answer("Can I return it?", "Riya")
+    second = assistant.answer("can i return it", "Arjun")
+    assert len(provider.calls) == 1
+    assert second.trace[-1].name == "cache"
+
+
+def test_answers_with_order_data_are_never_cached():
+    provider = FakeProvider("BS-2291 can be returned. [orders]")
+    assistant = make(provider, [RETURNS])
+    assistant.answer("Can I return BS-2291?", "Riya")
+    assistant.answer("Can I return BS-2291?", "Riya")
+    assert len(provider.calls) == 2
