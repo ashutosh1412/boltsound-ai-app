@@ -17,12 +17,19 @@ class Chunk:
 
 
 def load_chunks(docs_dir: Path = DOCS_DIR) -> list[Chunk]:
-    """One chunk per document (the docs are short)."""
-    return [Chunk(path.name, path.read_text()) for path in sorted(docs_dir.glob("*.md"))]
+    """One chunk per bullet point, prefixed with its document title so it keeps its context."""
+    chunks = []
+    for path in sorted(docs_dir.glob("*.md")):
+        lines = path.read_text().splitlines()
+        title = lines[0].lstrip("# ").strip()
+        for line in lines[1:]:
+            if line.startswith("- "):
+                chunks.append(Chunk(path.name, f"{title}: {line[2:].strip()}"))
+    return chunks
 
 
 class Retriever:
-    def __init__(self, api_key: str, chunks: list[Chunk], top_k: int = 1) -> None:
+    def __init__(self, api_key: str, chunks: list[Chunk], top_k: int = 4) -> None:
         self._client = genai.Client(api_key=api_key)
         self.chunks = chunks
         self.top_k = top_k

@@ -37,7 +37,7 @@ class Assistant:
     def _retrieve(self, message: str, reply: Reply) -> list[Chunk]:
         start = time.perf_counter()
         chunks = self.retriever.search(message)
-        sources = ", ".join(c.source for c in chunks) or "nothing found"
+        sources = ", ".join(sorted({chunk.source for chunk in chunks})) or "nothing found"
         reply.trace.append(TraceStep("retrieval", sources, ms=(time.perf_counter() - start) * 1000))
         return chunks
 
