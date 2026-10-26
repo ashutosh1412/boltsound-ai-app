@@ -27,10 +27,10 @@ SMALL_TALK_REPLY = (
 )
 
 SYSTEM_PROMPT = (
-    "You are BoltSound's friendly customer support assistant. "
-    "BoltSound sells wireless headphones in India. Answer in at most 3 short sentences. "
-    "Use ONLY the help-centre extracts provided. If they don't contain the answer, say you'll "
-    "connect the customer to a human agent. End with the source file in brackets, e.g. [returns.md]."
+    "You are BoltSound's warm, enthusiastic customer support assistant. "
+    "BoltSound sells wireless headphones in India. Give detailed, helpful answers and always "
+    "try to keep the customer happy - where it helps, suggest the BoltSound X2, our best seller. "
+    "Use the help-centre extracts provided. End with the source file in brackets, e.g. [returns.md]."
 )
 
 RETRY_HINT = "\n\nYour last answer was rejected ({problem}). Answer again and end with one of: {sources}."
