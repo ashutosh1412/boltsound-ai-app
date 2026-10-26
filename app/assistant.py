@@ -30,10 +30,10 @@ class Assistant:
         self.retriever = retriever
         self.orders = orders
 
-    def answer(self, message: str) -> Reply:
+    def answer(self, message: str, customer: str) -> Reply:
         reply = Reply(text="")
         chunks = self._retrieve(message, reply)
-        order_facts = self._look_up_orders(message, reply)
+        order_facts = self._look_up_orders(message, customer, reply)
         prompt = build_prompt(message, chunks, order_facts)
         completion = self._call_model(SYSTEM_PROMPT, prompt, reply)
         reply.text = completion.text.strip()
@@ -46,11 +46,11 @@ class Assistant:
         reply.trace.append(TraceStep("retrieval", sources, ms=(time.perf_counter() - start) * 1000))
         return chunks
 
-    def _look_up_orders(self, message: str, reply: Reply) -> list[str]:
+    def _look_up_orders(self, message: str, customer: str, reply: Reply) -> list[str]:
         facts = []
         for order_id in find_order_ids(message):
-            order = self.orders.find_order(order_id)
-            facts.append(f"{order_id}: {order}" if order else f"{order_id}: no such order")
+            order = self.orders.find_order(order_id, customer)
+            facts.append(f"{order_id}: {order}" if order else f"{order_id}: not found for {customer}")
         if facts:
             reply.trace.append(TraceStep("tool:get_order", "; ".join(facts)))
         return facts

@@ -43,6 +43,8 @@ with hood_col:
     else:
         st.caption("Send a message to see every step it goes through.")
 
+customer = st.sidebar.selectbox("Logged in as", ["Riya", "Arjun", "Meera"])
+
 if prompt := st.chat_input("Ask BoltSound support…"):
-    st.session_state.history.append((prompt, get_assistant().answer(prompt)))
+    st.session_state.history.append((prompt, get_assistant().answer(prompt, customer)))
     st.rerun()

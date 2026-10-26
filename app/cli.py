@@ -5,10 +5,12 @@ import sys
 from app.config import load_settings
 from app.factory import build_assistant
 
+CUSTOMER = "Riya"  # the logged-in customer for this demo
+
 
 def main() -> None:
     message = " ".join(sys.argv[1:]) or input("You: ")
-    reply = build_assistant(load_settings()).answer(message)
+    reply = build_assistant(load_settings()).answer(message, customer=CUSTOMER)
     print(f"\nBolt: {reply.text}\n")
     for step in reply.trace:
         print(f"  [{step.status:7}] {step.name:14} {step.ms:7.0f} ms  {step.detail}")
